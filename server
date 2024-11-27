@@ -1,12 +1,9 @@
 const express = require('express');
+const session = require('express-session');
+const bcrypt = require('bcrypt');
 const app = express();
 const path = require('path');
 const bodyParser = require('body-parser');
-const session = require('express-session');
-const bcrypt = require('bcrypt');
-const mysql = require('mysql2');
-
-
 
 app.use(bodyParser.urlencoded({ extended: true }));
 
@@ -17,18 +14,19 @@ app.use(session({
   saveUninitialized: false,
 }));
 
-function requireRole(role) {
+
+function requireRole(roles) {
   return (req, res, next) => {
-      if (req.session.user && req.session.user.tipo_usuario === role) {
-          next();
-      } else {
-          res.status(403).send('Acceso denegado');
-      }
+    if (req.session.user && roles.includes(req.session.user.tipo_usuario)) {
+      next(); 
+    } else {
+      res.status(403).send('Acceso denegado'); 
+    }
   };
 }
 
 function requireLogin(req, res, next) {
-  if (!req.session.userId) {
+  if (!req.session.user) {
     return res.redirect('/login.html');
   }
   next();
@@ -39,18 +37,29 @@ app.get('/', requireLogin, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+app.use(express.urlencoded({ extended: true }));
+
 // Servir archivos estáticos (HTML)
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Conexión a MySQL
+const mysql = require('mysql2');
+// Configurar conexión a MySQL
+
 const connection = mysql.createConnection({
   host: 'localhost',
   user: 'root',
-  password: '14082004chimin',
+  password: '14082004chimin', // Cambia por tu contraseña
   database: 'gestion_pacientes'
 });
 
-connection.connect();
+connection.connect(err => {
+  if (err) {
+    console.error('Error conectando a MySQL:', err);
+    return;
+  }
+  console.log('Conexión exitosa a MySQL');
+});
+
 
 
 // Registro de usuario
@@ -110,7 +119,6 @@ app.get('/tipo-usuario', requireLogin, (req, res) => {
   res.json({ tipo_usuario: req.session.user.tipo_usuario });
 });
 
-
 // Cerrar sesión
 app.get('/logout', (req, res) => {
   req.session.destroy();
@@ -118,9 +126,10 @@ app.get('/logout', (req, res) => {
 });
 
 
+
 // Ruta para guardar datos en la base de datos
-app.post('/submit-data', (req, res) => {
-  const { name, age, heart_rate } = req.body;
+app.post('/submit-data', requireLogin, requireRole('medico'), (req, res) => {
+  const { name, age, heart_rate, weight_, temp } = req.body;
 
   const query = 'INSERT INTO pacientes (nombre, edad, frecuencia_cardiaca) VALUES (?, ?, ?)';
   connection.query(query, [name, age, heart_rate], (err, result) => {
@@ -130,6 +139,7 @@ app.post('/submit-data', (req, res) => {
     res.send(`Paciente ${name} guardado en la base de datos.`);
   });
 });
+
 
 // Ruta para que solo admin pueda ver todos los usuarios
 app.get('/ver-usuarios', requireLogin, requireRole('admin'), (req, res) => {
@@ -180,7 +190,7 @@ app.get('/ver-usuarios', requireLogin, requireRole('admin'), (req, res) => {
 });
 
 // Ruta para mostrar los datos de la base de datos en formato HTML
-app.get('/pacientes', requireLogin,requireRole('admin'), (req, res) => {
+app.get('/pacientes', requireLogin, requireRole(['medico']), (req, res) => {
   connection.query('SELECT * FROM pacientes', (err, results) => {
     if (err) {
       return res.send('Error al obtener los datos.');
@@ -228,12 +238,12 @@ app.get('/pacientes', requireLogin,requireRole('admin'), (req, res) => {
 });
 
 // Ruta para buscar pacientes según filtros
-app.get('/buscar-pacientes', requireLogin,requireRole('admin'), (req, res) => {
+app.get('/buscar-pacientes', requireLogin, requireRole('medico'), (req, res) => {
   const { name_search, age_search } = req.query;
   let query = 'SELECT * FROM pacientes WHERE 1=1';
 
   if (name_search) {
-    query += ` AND nombre LIKE '%${name_search}%'`;
+    query +=  `AND nombre LIKE '%${name_search}%'`;
   }
   if (age_search) {
     query += ` AND edad = ${age_search}`;
@@ -286,7 +296,7 @@ app.get('/buscar-pacientes', requireLogin,requireRole('admin'), (req, res) => {
 });
 
 // Ruta para ordenar pacientes por frecuencia cardiaca
-app.get('/ordenar-pacientes', requireLogin,requireRole('admin'), (req, res) => {
+app.get('/ordenar-pacientes', requireLogin, requireRole(['medico']), (req, res) => {
   const query = 'SELECT * FROM pacientes ORDER BY frecuencia_cardiaca DESC';
 
   connection.query(query, (err, results) => {
@@ -336,7 +346,7 @@ app.get('/ordenar-pacientes', requireLogin,requireRole('admin'), (req, res) => {
 });
 
 // Ruta para insertar un nuevo médico
-app.post('/insertar-medico', requireLogin, (req, res) => {
+app.post('/insertar-medico', requireLogin, requireRole('admin'), (req, res) => {
   const { medico_name, especialidad } = req.body;
   const query = 'INSERT INTO medicos (nombre, especialidad) VALUES (?, ?)';
 
@@ -348,7 +358,158 @@ app.post('/insertar-medico', requireLogin, (req, res) => {
   });
 });
 
+// Ruta para mostrar los medicos de la base de datos en formato HTML
+app.get('/medico', requireLogin, requireRole('admin'), (req, res) => {
+  connection.query('SELECT * FROM medicos', (err, results) => {
+    if (err) {
+      return res.send('Error al obtener los datos.');
+    }
+
+    let html = `
+      <html>
+      <head>
+        <link rel="stylesheet" href="/styles.css">
+        <title>Pacientes</title>
+      </head>
+      <body>
+        <h1>Medicos Registrados</h1>
+        <table>
+          <thead>
+            <tr>
+              <th>Nombre</th>
+              <th>Especialidad</th>
+            </tr>
+          </thead>
+          <tbody>
+    `;
+
+    results.forEach(medico => {
+      html += `
+        <tr>
+          <td>${medico.nombre}</td>
+          <td>${medico.especialidad}</td>
+        </tr>
+      `;
+    });
+
+    html += `
+          </tbody>
+        </table>
+        <button onclick="window.location.href='/'">Volver</button>
+      </body>
+      </html>
+    `;
+
+    res.send(html);
+  });
+});
+
+// Ruta para mostrar los medicos de la base de datos en formato HTML orden alfabetico
+app.get('/medicoASC', requireLogin, requireRole('admin'), (req, res) => {
+  connection.query('SELECT * FROM medicos ORDER BY nombre ASC', (err, results) => {
+    if (err) {
+      return res.send('Error al obtener los datos.');
+    }
+
+    let html = `
+      <html>
+      <head>
+        <link rel="stylesheet" href="/styles.css">
+        <title>Pacientes</title>
+      </head>
+      <body>
+        <h1>Medicos Registrados</h1>
+        <table>
+          <thead>
+            <tr>
+              <th>Nombre</th>
+              <th>Especialidad</th>
+            </tr>
+          </thead>
+          <tbody>
+    `;
+
+    results.forEach(medico => {
+      html += `
+        <tr>
+          <td>${medico.nombre}</td>
+          <td>${medico.especialidad}</td>
+        </tr>
+      `;
+    });
+
+    html += `
+          </tbody>
+        </table>
+        <button onclick="window.location.href='/'">Volver</button>
+      </body>
+      </html>
+    `;
+
+    res.send(html);
+  });
+});
+
+// Ruta para mostrar los datos de la base de datos en formato HTML
+app.get('/ver-mis-datos', requireLogin, requireRole('paciente'), (req, res) => {
+  console.log(req.session.user);
+  const user = req.session.user.nombre_usuario;
+  console.log(user);
+
+  const query = 'SELECT * FROM pacientes WHERE nombre = ?';
+  connection.query(query, [user], (err, results) => {
+    if (err) {
+      console.error('Error al obtener los datos.', err);
+      return res.send('Error al obtener los datos.');
+    }
+
+    if (results.length === 0) {
+      return res.send('No se encontraron los datos.'); 
+    }
+
+    const paciente = results[0];
+    let html = `
+      <html>
+      <head>
+        <link rel="stylesheet" href="/styles.css">
+        <title>Mis Datos</title>
+      </head>
+      <body>
+        <h1>Mis Datos</h1>
+        <table>
+          <thead>
+            <tr>
+              <th>Nombre</th>
+              <th>Edad</th>
+              <th>Frecuencia Cardiaca (bpm)</th>
+            </tr>
+          </thead>
+          <tbody>
+    `;
+
+    results.forEach(paciente => {
+      html += `
+        <tr>
+          <td>${paciente.nombre}</td>
+          <td>${paciente.edad}</td>
+          <td>${paciente.frecuencia_cardiaca}</td>
+        </tr>
+      `;
+    });
+
+    html += `
+          </tbody>
+        </table>
+        <button onclick="window.location.href='/'">Volver</button>
+      </body>
+      </html>
+    `;
+
+    res.send(html);
+  });
+});
+
 // Iniciar el servidor
 app.listen(3000, () => {
-  console.log('Servidor corriendo en http://localhost:3000');
-});
+    console.log('Servidor corriendo en http://localhost:3000');
+})
